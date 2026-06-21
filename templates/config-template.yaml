@@ -1,0 +1,53 @@
+business:
+  company_name: "Your Company"
+  product: "industrial pumps"
+  product_description: "reliable pump components for industrial water systems"
+  advantages:
+    - "stable quality"
+    - "responsive engineering support"
+  sender_name: "Jane Smith"
+  sender_title: "Export Manager"
+  sender_email: "jane@example.com"
+  company_website: "https://example.com"
+target:
+  countries: ["Germany"]
+  industries: ["industrial pumps", "water treatment"]
+  customer_types: ["distributor", "supplier", "manufacturer"]
+  company_sizes: ["small", "medium"]
+  preferred_titles:
+    - Owner
+    - Founder
+    - CEO
+    - Managing Director
+    - Procurement Manager
+    - Purchasing Manager
+    - Sourcing Manager
+    - Supply Chain Manager
+    - Operations Manager
+    - Production Manager
+  excluded_keywords:
+    - school
+    - university
+    - recruitment
+    - job agency
+    - competitor
+limits:
+  companies_per_run: 10
+  websites_per_run: 10
+  drafts_per_run: 5
+  request_interval_min_seconds: 5
+  request_interval_max_seconds: 12
+  request_timeout_seconds: 30
+  retry_count: 2
+scoring:
+  minimum_qualified_score: 70
+  minimum_draft_score: 75
+browser:
+  headless: true
+  use_playwright_fallback: true
+email:
+  mode: draft_only
+  allow_guessed_email: false
+  require_manual_approval: true
+
+
