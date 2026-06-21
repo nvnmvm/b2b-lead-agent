@@ -1,0 +1,21 @@
+[
+  "lead_id",
+  "company_name",
+  "website",
+  "country",
+  "industry",
+  "company_summary",
+  "contact_name",
+  "job_title",
+  "email",
+  "email_status",
+  "score",
+  "score_level",
+  "match_reason",
+  "source_url",
+  "email_subject",
+  "email_body",
+  "status"
+]
+
+
