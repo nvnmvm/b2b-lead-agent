@@ -69,11 +69,23 @@ def qualified_lead(lead_id: str = "lead-acme", email: str = "anna.weber@acmepump
 def test_generate_email_draft_uses_evidence_and_word_limit(tmp_path: Path) -> None:
     draft = generate_email_draft(qualified_lead(), draft_config(tmp_path))
     assert draft["subject"] == "Quick question about Acme Pump Systems"
-    assert "Acme Pump Systems is an industrial pumps distributor in Germany" in draft["body"]
-    assert draft["personalization_evidence"]
+    assert "Industrial pumps distributor for water treatment equipment" in draft["body"]
+    assert draft["personalization_evidence"] == "Industrial pumps distributor for water treatment equipment"
     assert draft["source_url"] == "https://acmepumps.test/contact"
     assert 80 <= word_count(draft["body"]) <= 150
     assert "will not follow up" in draft["body"]
+
+
+def test_generate_email_draft_does_not_use_email_contact_snippet(tmp_path: Path) -> None:
+    lead = qualified_lead()
+    lead["company_summary"] = ""
+    lead["evidence_text"] = "Anna Weber Procurement Manager anna.weber@acmepumps.test"
+
+    draft = generate_email_draft(lead, draft_config(tmp_path))
+
+    assert "anna.weber@acmepumps.test" not in draft["body"]
+    assert draft["personalization_sentence"] == ""
+    assert draft["personalization_evidence"] == ""
 
 
 def insert_lead(conn, lead: dict) -> None:
@@ -143,4 +155,3 @@ def test_draft_pending_leads_does_not_draft_guessed_email(tmp_path: Path) -> Non
     assert processed == 0
     assert errors == []
     assert draft_count == 0
-
