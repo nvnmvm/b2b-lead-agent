@@ -1,0 +1,16 @@
+Subject: Quick question about {{company_name}}
+
+Hi {{contact_name_or_team}},
+
+I saw that {{personalization_sentence}} We help companies with {{product_description}}.
+
+Would it be useful if I sent a short overview for your team to review?
+
+Best regards,
+{{sender_name}}
+{{sender_title}}
+{{sender_email}}
+
+If this is not relevant, please let me know and I will not follow up.
+
+
