@@ -34,8 +34,12 @@ def contact_greeting(lead: dict[str, Any]) -> str:
 
 
 def build_personalization_sentence(lead: dict[str, Any]) -> tuple[str, str]:
-    evidence = clean_sentence(str(lead.get("evidence_text") or ""))
-    company = clean_sentence(str(lead.get("company_name") or "your company"), "your company")
+    summary = clean_sentence(str(lead.get("company_summary") or ""))
+    evidence = summary or clean_sentence(str(lead.get("evidence_text") or ""))
+    if "@" in evidence and summary:
+        evidence = summary
+    elif "@" in evidence:
+        evidence = ""
     if evidence:
         sentence = f"I noticed this on your website: {evidence}"
         return clean_sentence(sentence), evidence
@@ -173,4 +177,3 @@ def draft_pending_leads(conn: sqlite3.Connection, config) -> tuple[int, list[str
         except Exception as exc:
             errors.append(f"{lead.get('lead_id')}: {type(exc).__name__}: {exc}")
     return processed, errors
-
