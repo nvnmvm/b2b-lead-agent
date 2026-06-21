@@ -1,0 +1,51 @@
+business:
+  company_name: ""
+  product: ""
+  product_description: ""
+  advantages: []
+  sender_name: ""
+  sender_title: ""
+  sender_email: ""
+  company_website: ""
+target:
+  countries: []
+  industries: []
+  customer_types: []
+  company_sizes: []
+  preferred_titles:
+    - Owner
+    - Founder
+    - CEO
+    - Managing Director
+    - Procurement Manager
+    - Purchasing Manager
+    - Sourcing Manager
+    - Supply Chain Manager
+    - Operations Manager
+    - Production Manager
+  excluded_keywords:
+    - school
+    - university
+    - recruitment
+    - job agency
+    - competitor
+limits:
+  companies_per_run: 10
+  websites_per_run: 10
+  drafts_per_run: 5
+  request_interval_min_seconds: 5
+  request_interval_max_seconds: 12
+  request_timeout_seconds: 30
+  retry_count: 2
+scoring:
+  minimum_qualified_score: 70
+  minimum_draft_score: 75
+browser:
+  headless: true
+  use_playwright_fallback: true
+email:
+  mode: draft_only
+  allow_guessed_email: false
+  require_manual_approval: true
+
+
