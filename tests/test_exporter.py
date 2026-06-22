@@ -89,4 +89,5 @@ def test_export_results_creates_excel_json_and_review_files(tmp_path: Path) -> N
     assert exported[0]["lead_id"] == "lead-acme"
     assert summary["exported_leads"] == 1
     assert frame.loc[0, "email"] == "anna.weber@acmepumps.test"
-
+    assert "whatsapp" in exported[0]
+    assert "evidence_text" in exported[0]

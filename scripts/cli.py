@@ -8,7 +8,7 @@ from typing import Any
 
 from scripts import config_loader
 from scripts.approval import approve_send
-from scripts.company_search import import_companies_csv
+from scripts.company_search import import_companies_csv, import_discovered_companies
 from scripts.database import (
     DEFAULT_DB_PATH,
     create_task,
@@ -48,7 +48,7 @@ def init_command(args: argparse.Namespace) -> CommandResult:
 
 
 def search_command(args: argparse.Namespace) -> CommandResult:
-    config = config_loader.load_config(args.config)
+    config = config_loader.load_config(args.config, validate_business=False)
     init_db(DEFAULT_DB_PATH)
     errors: list[str] = []
     processed = 0
@@ -61,7 +61,7 @@ def search_command(args: argparse.Namespace) -> CommandResult:
         task_id = create_task(conn, "search", {"csv_path": str(csv_path) if csv_path else None})
         try:
             if csv_path is None:
-                errors.append("Automatic web search is not implemented in this version. Provide --input-csv.")
+                processed, errors = import_discovered_companies(conn, config, limit=int(config.limits["companies_per_run"]))
             else:
                 processed = import_companies_csv(conn, csv_path, limit=int(config.limits["companies_per_run"]))
             finish_task(conn, task_id, "DONE" if not errors else "PARTIAL", {"processed": processed, "errors": errors})
@@ -81,7 +81,7 @@ def status_command(args: argparse.Namespace) -> CommandResult:
 
 
 def scan_command(args: argparse.Namespace) -> CommandResult:
-    config = config_loader.load_config(args.config)
+    config = config_loader.load_config(args.config, validate_business=False)
     init_db(DEFAULT_DB_PATH)
     with db_session(DEFAULT_DB_PATH) as conn:
         if args.website:
@@ -239,4 +239,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
-
