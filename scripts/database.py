@@ -78,6 +78,7 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 normalized_email TEXT,
                 email_status TEXT NOT NULL,
                 phone TEXT,
+                whatsapp TEXT,
                 source_url TEXT,
                 evidence_text TEXT,
                 confidence REAL DEFAULT 0,
@@ -106,6 +107,8 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 job_title TEXT,
                 email TEXT,
                 email_status TEXT,
+                phone TEXT,
+                whatsapp TEXT,
                 source_url TEXT,
                 evidence_text TEXT,
                 score INTEGER DEFAULT 0,
@@ -177,6 +180,15 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
             );
             """
         )
+        ensure_column(conn, "contacts", "whatsapp", "TEXT")
+        ensure_column(conn, "leads", "phone", "TEXT")
+        ensure_column(conn, "leads", "whatsapp", "TEXT")
+
+
+def ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def create_task(conn: sqlite3.Connection, action: str, details: dict[str, Any] | None = None) -> int:
@@ -250,4 +262,3 @@ def reset_processing_errors(conn: sqlite3.Connection) -> int:
         (LeadStatus.DISCOVERED.value, utc_now(), LeadStatus.ERROR.value),
     )
     return int(rows.rowcount or 0)
-

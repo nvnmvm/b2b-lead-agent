@@ -52,10 +52,13 @@ def fetch_export_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
             leads.job_title,
             leads.email,
             leads.email_status,
+            leads.phone,
+            leads.whatsapp,
             leads.score,
             leads.score_level,
             leads.score_details,
             leads.source_url,
+            leads.evidence_text,
             leads.status,
             email_drafts.subject AS email_subject,
             email_drafts.body AS email_body
@@ -172,4 +175,3 @@ def export_results(conn: sqlite3.Connection, output_dir: str | Path = OUTPUT_DIR
         "review_files": review_files,
         "summary": summary,
     }
-

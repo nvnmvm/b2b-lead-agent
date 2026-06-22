@@ -9,13 +9,14 @@
   "job_title",
   "email",
   "email_status",
+  "phone",
+  "whatsapp",
   "score",
   "score_level",
   "match_reason",
   "source_url",
+  "evidence_text",
   "email_subject",
   "email_body",
   "status"
 ]
-
-

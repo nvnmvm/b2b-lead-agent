@@ -71,7 +71,10 @@ def test_scan_pending_company_writes_contacts_and_leads(tmp_path: Path) -> None:
         processed, errors = scan_pending_companies(conn, config)
         counts = status_counts(conn)
         company = conn.execute("SELECT status, evidence_text FROM companies").fetchone()
-        lead = conn.execute("SELECT email, email_status, industry, source_url, evidence_text FROM leads WHERE email = ?", ("anna.weber@acmepumps.test",)).fetchone()
+        lead = conn.execute(
+            "SELECT email, email_status, phone, whatsapp, industry, source_url, evidence_text FROM leads WHERE email = ?",
+            ("anna.weber@acmepumps.test",),
+        ).fetchone()
 
     assert processed == 1
     assert errors == []
@@ -80,6 +83,8 @@ def test_scan_pending_company_writes_contacts_and_leads(tmp_path: Path) -> None:
     assert company["status"] == "SCANNED"
     assert "industrial pumps" in company["evidence_text"]
     assert lead["email_status"] == "PUBLIC_CONFIRMED"
+    assert lead["phone"] == "+493012345678"
+    assert lead["whatsapp"] == ""
     assert lead["industry"] == "industrial pumps"
     assert lead["source_url"]
     assert lead["evidence_text"]
@@ -175,4 +180,3 @@ def test_csv_import_and_scan_resume(tmp_path: Path) -> None:
     assert first_errors == []
     assert second_errors == []
     assert statuses == {"SCANNED": 2}
-

@@ -43,9 +43,9 @@ scoring:
 browser:
   headless: true
   use_playwright_fallback: true
+discovery:
+  max_search_queries: 8
 email:
   mode: draft_only
   allow_guessed_email: false
   require_manual_approval: true
-
-

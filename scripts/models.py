@@ -70,6 +70,7 @@ class ContactCandidate:
     contact_name: str = ""
     job_title: str = ""
     phone: str = ""
+    whatsapp: str = ""
 
 
 @dataclass
@@ -84,4 +85,3 @@ class ScanResult:
     source_url: str = ""
     contacts: list[ContactCandidate] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
-

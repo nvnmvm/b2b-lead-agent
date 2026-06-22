@@ -1,14 +1,35 @@
 from __future__ import annotations
 
 import csv
+import re
 import sqlite3
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
+from bs4 import BeautifulSoup
+
+from scripts import website_fetcher
 from scripts.database import utc_now
 
 
 REQUIRED_CSV_COLUMNS = ("company_name", "website", "country", "source_url")
+EXCLUDED_DISCOVERY_DOMAINS = {
+    "linkedin.com",
+    "facebook.com",
+    "instagram.com",
+    "youtube.com",
+    "youtu.be",
+    "x.com",
+    "twitter.com",
+    "tiktok.com",
+    "pinterest.com",
+    "reddit.com",
+    "wa.me",
+    "whatsapp.com",
+    "google.com",
+    "duckduckgo.com",
+    "bing.com",
+}
 
 
 def normalize_domain(url: str) -> str:
@@ -40,6 +61,14 @@ def normalize_website(url: str) -> str:
     if "://" not in value:
         return "https://" + value.rstrip("/")
     return value.rstrip("/")
+
+
+def root_website(url: str) -> str:
+    value = normalize_website(url)
+    parsed = urlparse(value)
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        return f"{parsed.scheme}://{parsed.netloc}"
+    return value
 
 
 def load_companies_csv(csv_path: str | Path) -> list[dict[str, str]]:
@@ -136,18 +165,150 @@ def import_companies_csv(conn: sqlite3.Connection, csv_path: str | Path, *, limi
     return processed
 
 
+def raw_config(config) -> dict:
+    return getattr(config, "raw", config)
+
+
 def build_search_queries(config: dict) -> list[str]:
-    product = config.get("business", {}).get("product", "").strip()
+    config = raw_config(config)
+    product = (config.get("business", {}).get("product") or "").strip()
     countries = config.get("target", {}).get("countries", []) or [""]
     industries = config.get("target", {}).get("industries", []) or [product]
+    customer_types = config.get("target", {}).get("customer_types", []) or ["supplier", "manufacturer", "distributor"]
     queries: list[str] = []
     for country in countries:
         for industry in industries:
             phrase = " ".join(part for part in (industry or product, country) if part).strip()
             if phrase:
-                queries.append(f'"{phrase}" distributor')
-                queries.append(f'"{phrase}" supplier')
-                if country:
-                    queries.append(f'site:.{country[:2].lower()} "{product}"')
+                for customer_type in customer_types[:4]:
+                    queries.append(f'"{phrase}" "{customer_type}" "contact"')
+                queries.append(f'"{phrase}" "Email" "WhatsApp"')
+                queries.append(f'"{phrase}" "Contact Us" "manufacturer"')
+                if product and country:
+                    queries.append(f'"{product}" "{country}" "WhatsApp" "Email"')
     return list(dict.fromkeys(queries))
 
+
+def unwrap_search_url(url: str) -> str:
+    parsed = urlparse(url)
+    if ("duckduckgo.com" in parsed.netloc or not parsed.netloc) and parsed.path.startswith("/l/"):
+        target = parse_qs(parsed.query).get("uddg", [""])[0]
+        if target:
+            return unquote(target)
+    return url
+
+
+def parse_search_results(html_text: str) -> list[dict[str, str]]:
+    soup = BeautifulSoup(html_text or "", "lxml")
+    parsed: list[dict[str, str]] = []
+    blocks = soup.select(".result") or soup.select("li.b_algo") or soup.select("article") or soup.select("div")
+    for block in blocks:
+        link = block.select_one("a.result__a[href]") or block.select_one("h2 a[href]") or block.select_one("a[href]")
+        if not link:
+            continue
+        href = unwrap_search_url(link.get("href") or "")
+        title = link.get_text(" ", strip=True)
+        snippet_tag = block.select_one(".result__snippet") or block.select_one("p")
+        snippet = snippet_tag.get_text(" ", strip=True) if snippet_tag else ""
+        if href and title:
+            parsed.append({"title": title, "url": href, "snippet": snippet})
+    return parsed
+
+
+def is_excluded_discovery_domain(domain: str) -> bool:
+    return any(domain == excluded or domain.endswith("." + excluded) for excluded in EXCLUDED_DISCOVERY_DOMAINS)
+
+
+def company_name_from_result(title: str, domain: str) -> str:
+    value = re.sub(r"\s+", " ", title or "").strip()
+    value = re.sub(r"\s*[\-|–|—|:]\s*(contact us|contacts?|about us|home|official site).*$", "", value, flags=re.I)
+    value = re.sub(r"^(contact us|contacts?|about us|home)\s*[\-|–|—|:]\s*", "", value, flags=re.I)
+    value = re.split(r"\s*[\-|–|—|:]\s*", value)[0].strip()
+    if value and len(value) <= 80:
+        return value
+    parts = domain.split(".")
+    return " ".join(part.capitalize() for part in parts[:1]) or domain
+
+
+def candidate_from_search_result(result: dict[str, str], config) -> dict[str, str] | None:
+    url = result.get("url", "")
+    domain = normalize_domain(url)
+    if not domain or is_excluded_discovery_domain(domain):
+        return None
+    parsed = urlparse(normalize_website(url))
+    if parsed.scheme not in {"http", "https"}:
+        return None
+    config = raw_config(config)
+    country = ""
+    haystack = f"{result.get('title', '')} {result.get('snippet', '')}".lower()
+    for item in config.get("target", {}).get("countries", []) or []:
+        if item and item.lower() in haystack:
+            country = item
+            break
+    now = utc_now()
+    return {
+        "company_name": company_name_from_result(result.get("title", ""), domain),
+        "website": root_website(url),
+        "domain": domain,
+        "country": country,
+        "source_url": url,
+        "status": "DISCOVERED",
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+def fetch_search_results(query: str, config) -> list[dict[str, str]]:
+    requests = website_fetcher.load_requests_module()
+    timeout = min(int(raw_config(config).get("limits", {}).get("request_timeout_seconds", 30)), 10)
+    headers = {"User-Agent": "b2b-lead-agent/0.1 (+public business contact review)"}
+    errors: list[str] = []
+    for url in ("https://html.duckduckgo.com/html/", "https://www.bing.com/search"):
+        try:
+            response = requests.get(url, params={"q": query}, headers=headers, timeout=timeout)
+            response.raise_for_status()
+            results = parse_search_results(response.text)
+            if results:
+                return results
+        except Exception as exc:
+            errors.append(f"{type(exc).__name__}: {exc}")
+    if errors:
+        raise RuntimeError("; ".join(errors))
+    return []
+
+
+def discover_companies_public_web(config, *, limit: int | None = None) -> tuple[list[dict[str, str]], list[str]]:
+    max_companies = limit or int(raw_config(config).get("limits", {}).get("companies_per_run", 10))
+    companies: list[dict[str, str]] = []
+    errors: list[str] = []
+    seen_domains: set[str] = set()
+    discovery = raw_config(config).get("discovery", {}) or {}
+    max_queries = int(discovery.get("max_search_queries", min(8, max(max_companies * 2, 1))))
+    for query in build_search_queries(config)[:max_queries]:
+        if len(companies) >= max_companies:
+            break
+        try:
+            results = fetch_search_results(query, config)
+        except Exception as exc:
+            errors.append(f"{query}: {type(exc).__name__}: {exc}")
+            continue
+        for result in results:
+            candidate = candidate_from_search_result(result, config)
+            if not candidate or candidate["domain"] in seen_domains:
+                continue
+            seen_domains.add(candidate["domain"])
+            companies.append(candidate)
+            if len(companies) >= max_companies:
+                break
+    return companies, errors
+
+
+def import_discovered_companies(conn: sqlite3.Connection, config, *, limit: int | None = None) -> tuple[int, list[str]]:
+    companies, errors = discover_companies_public_web(config, limit=limit)
+    processed = 0
+    for company in companies:
+        upsert_company(conn, company)
+        processed += 1
+    if not processed and not errors:
+        errors.append("No public search results produced importable company websites.")
+    return processed, errors

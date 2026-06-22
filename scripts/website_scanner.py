@@ -8,7 +8,7 @@ from typing import Any
 from bs4 import BeautifulSoup
 
 from scripts.company_search import normalize_domain
-from scripts.contact_extractor import extract_public_emails, visible_text_from_html
+from scripts.contact_extractor import extract_public_contacts, visible_text_from_html
 from scripts.database import generate_lead_id, record_error, utc_now
 from scripts.models import EmailStatus, LeadStatus, ScanResult
 from scripts.website_fetcher import fetch_site_pages
@@ -90,7 +90,7 @@ def scan_company_website(company: dict[str, Any], config) -> ScanResult:
         combined_text_parts.append(text)
         if not summary:
             summary = first_meaningful_paragraph(page.text)
-        contacts.extend(extract_public_emails(page.text, page.final_url, domain))
+        contacts.extend(extract_public_contacts(page.text, page.final_url, domain))
 
     combined_text = "\n".join(combined_text_parts)
     industry, industry_evidence = infer_industry(combined_text, config)
@@ -125,19 +125,20 @@ def upsert_scan_result(conn: sqlite3.Connection, company: sqlite3.Row, result: S
     inserted_or_updated = 0
     if result.contacts:
         for contact in result.contacts:
-            normalized_email = contact.email.lower()
+            normalized_email = contact.email.lower() if contact.email else None
             cursor = conn.execute(
                 """
                 INSERT INTO contacts(
                     company_id, contact_name, job_title, email, normalized_email, email_status,
-                    phone, source_url, evidence_text, confidence, created_at, updated_at
+                    phone, whatsapp, source_url, evidence_text, confidence, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(normalized_email) DO UPDATE SET
                     contact_name = COALESCE(NULLIF(excluded.contact_name, ''), contacts.contact_name),
                     job_title = COALESCE(NULLIF(excluded.job_title, ''), contacts.job_title),
                     email_status = excluded.email_status,
                     phone = COALESCE(NULLIF(excluded.phone, ''), contacts.phone),
+                    whatsapp = COALESCE(NULLIF(excluded.whatsapp, ''), contacts.whatsapp),
                     source_url = excluded.source_url,
                     evidence_text = excluded.evidence_text,
                     updated_at = excluded.updated_at
@@ -150,6 +151,7 @@ def upsert_scan_result(conn: sqlite3.Connection, company: sqlite3.Row, result: S
                     normalized_email,
                     contact.status.value,
                     contact.phone,
+                    contact.whatsapp,
                     contact.source_url,
                     contact.evidence_text,
                     0.9 if contact.status == EmailStatus.PUBLIC_CONFIRMED else 0.6,
@@ -157,20 +159,23 @@ def upsert_scan_result(conn: sqlite3.Connection, company: sqlite3.Row, result: S
                     now,
                 ),
             )
-            contact_id_row = conn.execute(
-                "SELECT contact_id FROM contacts WHERE normalized_email = ?",
-                (normalized_email,),
-            ).fetchone()
-            contact_id = contact_id_row["contact_id"] if contact_id_row else cursor.lastrowid
-            lead_id = generate_lead_id(result.domain, contact.email)
+            if normalized_email:
+                contact_id_row = conn.execute(
+                    "SELECT contact_id FROM contacts WHERE normalized_email = ?",
+                    (normalized_email,),
+                ).fetchone()
+                contact_id = contact_id_row["contact_id"] if contact_id_row else cursor.lastrowid
+            else:
+                contact_id = cursor.lastrowid
+            lead_id = generate_lead_id(result.domain, contact.email or contact.whatsapp or contact.phone)
             conn.execute(
                 """
                 INSERT INTO leads(
                     lead_id, task_id, company_id, contact_id, company_name, website, domain,
                     country, industry, company_summary, contact_name, job_title, email,
-                    email_status, source_url, evidence_text, status, created_at, updated_at
+                    email_status, phone, whatsapp, source_url, evidence_text, status, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(domain, email) DO UPDATE SET
                     company_name = excluded.company_name,
                     website = excluded.website,
@@ -180,6 +185,8 @@ def upsert_scan_result(conn: sqlite3.Connection, company: sqlite3.Row, result: S
                     contact_name = excluded.contact_name,
                     job_title = excluded.job_title,
                     email_status = excluded.email_status,
+                    phone = COALESCE(NULLIF(excluded.phone, ''), leads.phone),
+                    whatsapp = COALESCE(NULLIF(excluded.whatsapp, ''), leads.whatsapp),
                     source_url = excluded.source_url,
                     evidence_text = excluded.evidence_text,
                     updated_at = excluded.updated_at,
@@ -201,8 +208,10 @@ def upsert_scan_result(conn: sqlite3.Connection, company: sqlite3.Row, result: S
                     result.company_summary,
                     contact.contact_name,
                     contact.job_title,
-                    contact.email,
+                    contact.email or None,
                     contact.status.value,
+                    contact.phone,
+                    contact.whatsapp,
                     contact.source_url,
                     contact.evidence_text,
                     LeadStatus.SCANNED.value,
@@ -218,15 +227,17 @@ def upsert_scan_result(conn: sqlite3.Connection, company: sqlite3.Row, result: S
             INSERT INTO leads(
                 lead_id, task_id, company_id, company_name, website, domain, country,
                 industry, company_summary, email, email_status, source_url, evidence_text,
-                status, created_at, updated_at
+                phone, whatsapp, status, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(lead_id) DO UPDATE SET
                 country = excluded.country,
                 industry = excluded.industry,
                 company_summary = excluded.company_summary,
                 source_url = excluded.source_url,
                 evidence_text = excluded.evidence_text,
+                phone = excluded.phone,
+                whatsapp = excluded.whatsapp,
                 updated_at = excluded.updated_at
             """,
             (
@@ -243,6 +254,8 @@ def upsert_scan_result(conn: sqlite3.Connection, company: sqlite3.Row, result: S
                 EmailStatus.UNKNOWN.value,
                 result.source_url,
                 result.evidence_text,
+                "",
+                "",
                 LeadStatus.REVIEW_REQUIRED.value,
                 now,
                 now,
@@ -321,4 +334,3 @@ def scan_pending_companies(conn: sqlite3.Connection, config, *, task_id: int | N
 
 def score_details_json(details: dict[str, Any]) -> str:
     return json.dumps(details, ensure_ascii=False)
-
