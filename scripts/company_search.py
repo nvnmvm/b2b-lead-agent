@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import base64
 import re
 import sqlite3
 from pathlib import Path
@@ -29,7 +30,25 @@ EXCLUDED_DISCOVERY_DOMAINS = {
     "google.com",
     "duckduckgo.com",
     "bing.com",
+    "rocketreach.co",
+    "zoominfo.com",
+    "apollo.io",
+    "lusha.com",
+    "signalhire.com",
+    "crunchbase.com",
+    "theorg.com",
 }
+EXCLUDED_DISCOVERY_KEYWORDS = (
+    "email list",
+    "mailing list",
+    "manufacturers directory",
+    "manufacturer directory",
+    "supplier directory",
+    "company directory",
+    "database",
+    "leads list",
+)
+GENERIC_SUBDOMAINS = {"www", "corporate", "consumercare", "shop", "eshop", "store", "portal"}
 
 
 def normalize_domain(url: str) -> str:
@@ -191,6 +210,21 @@ def build_search_queries(config: dict) -> list[str]:
 
 def unwrap_search_url(url: str) -> str:
     parsed = urlparse(url)
+    if "r.search.yahoo.com" in parsed.netloc:
+        match = re.search(r"/RU=([^/]+)", url)
+        if match:
+            return unquote(match.group(1))
+    if "bing.com" in parsed.netloc and parsed.path.startswith("/ck/"):
+        target = parse_qs(parsed.query).get("u", [""])[0]
+        if target:
+            encoded = target[2:] if target.startswith("a1") else target
+            try:
+                padding = "=" * (-len(encoded) % 4)
+                decoded = base64.urlsafe_b64decode((encoded + padding).encode("ascii")).decode("utf-8", "ignore")
+                if decoded.startswith(("http://", "https://")):
+                    return decoded
+            except Exception:
+                return url
     if ("duckduckgo.com" in parsed.netloc or not parsed.netloc) and parsed.path.startswith("/l/"):
         target = parse_qs(parsed.query).get("uddg", [""])[0]
         if target:
@@ -201,14 +235,19 @@ def unwrap_search_url(url: str) -> str:
 def parse_search_results(html_text: str) -> list[dict[str, str]]:
     soup = BeautifulSoup(html_text or "", "lxml")
     parsed: list[dict[str, str]] = []
-    blocks = soup.select(".result") or soup.select("li.b_algo") or soup.select("article") or soup.select("div")
+    blocks = soup.select(".result") or soup.select("li.b_algo") or soup.select("div.algo") or soup.select("article") or soup.select("div")
     for block in blocks:
-        link = block.select_one("a.result__a[href]") or block.select_one("h2 a[href]") or block.select_one("a[href]")
+        link = (
+            block.select_one("a.result__a[href]")
+            or block.select_one("h2 a[href]")
+            or block.select_one(".compTitle a[href]")
+            or block.select_one("a[href]")
+        )
         if not link:
             continue
         href = unwrap_search_url(link.get("href") or "")
         title = link.get_text(" ", strip=True)
-        snippet_tag = block.select_one(".result__snippet") or block.select_one("p")
+        snippet_tag = block.select_one(".result__snippet") or block.select_one(".compText") or block.select_one("p")
         snippet = snippet_tag.get_text(" ", strip=True) if snippet_tag else ""
         if href and title:
             parsed.append({"title": title, "url": href, "snippet": snippet})
@@ -219,15 +258,22 @@ def is_excluded_discovery_domain(domain: str) -> bool:
     return any(domain == excluded or domain.endswith("." + excluded) for excluded in EXCLUDED_DISCOVERY_DOMAINS)
 
 
+def company_name_from_domain(domain: str) -> str:
+    parts = [part for part in domain.split(".") if part and part not in GENERIC_SUBDOMAINS]
+    label = parts[-2] if len(parts) >= 2 else (parts[0] if parts else domain)
+    return re.sub(r"[-_]+", " ", label).title() or domain
+
+
 def company_name_from_result(title: str, domain: str) -> str:
     value = re.sub(r"\s+", " ", title or "").strip()
+    if "http://" in value.lower() or "https://" in value.lower() or value.lower().startswith(domain.lower()):
+        return company_name_from_domain(domain)
     value = re.sub(r"\s*[\-|–|—|:]\s*(contact us|contacts?|about us|home|official site).*$", "", value, flags=re.I)
     value = re.sub(r"^(contact us|contacts?|about us|home)\s*[\-|–|—|:]\s*", "", value, flags=re.I)
     value = re.split(r"\s*[\-|–|—|:]\s*", value)[0].strip()
     if value and len(value) <= 80:
         return value
-    parts = domain.split(".")
-    return " ".join(part.capitalize() for part in parts[:1]) or domain
+    return company_name_from_domain(domain)
 
 
 def candidate_from_search_result(result: dict[str, str], config) -> dict[str, str] | None:
@@ -235,12 +281,14 @@ def candidate_from_search_result(result: dict[str, str], config) -> dict[str, st
     domain = normalize_domain(url)
     if not domain or is_excluded_discovery_domain(domain):
         return None
+    haystack = f"{result.get('title', '')} {result.get('snippet', '')} {url}".lower()
+    if any(keyword in haystack for keyword in EXCLUDED_DISCOVERY_KEYWORDS):
+        return None
     parsed = urlparse(normalize_website(url))
     if parsed.scheme not in {"http", "https"}:
         return None
     config = raw_config(config)
     country = ""
-    haystack = f"{result.get('title', '')} {result.get('snippet', '')}".lower()
     for item in config.get("target", {}).get("countries", []) or []:
         if item and item.lower() in haystack:
             country = item
@@ -261,11 +309,16 @@ def candidate_from_search_result(result: dict[str, str], config) -> dict[str, st
 def fetch_search_results(query: str, config) -> list[dict[str, str]]:
     requests = website_fetcher.load_requests_module()
     timeout = min(int(raw_config(config).get("limits", {}).get("request_timeout_seconds", 30)), 10)
-    headers = {"User-Agent": "b2b-lead-agent/0.1 (+public business contact review)"}
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; b2b-lead-agent/0.1; +public business contact review)"}
     errors: list[str] = []
-    for url in ("https://html.duckduckgo.com/html/", "https://www.bing.com/search"):
+    sources = (
+        ("https://search.yahoo.com/search", {"p": query}),
+        ("https://html.duckduckgo.com/html/", {"q": query}),
+        ("https://www.bing.com/search", {"q": query}),
+    )
+    for url, params in sources:
         try:
-            response = requests.get(url, params={"q": query}, headers=headers, timeout=timeout)
+            response = requests.get(url, params=params, headers=headers, timeout=timeout)
             response.raise_for_status()
             results = parse_search_results(response.text)
             if results:
